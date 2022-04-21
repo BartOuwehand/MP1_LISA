@@ -22,6 +22,8 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.coordinates import BarycentricMeanEcliptic
 
+from tqdm import tqdm
+
 # Import own functions
 from my_functions import *
 
@@ -30,9 +32,10 @@ orbit_path = '../../orbits/keplerian_long.h5'
 gw_path = 'gws.h5'
 
 # Setup simluation parameters
-fs = 0.1    # Hz
+# fs = 0.1    # Hz
+fs = 0.05    # Hz
 day = 86400 # s
-duration = day*5 # X days
+duration = day*90 # X days
 size = duration*fs
 discard = 300
 rec = ['A','E','T']
@@ -45,14 +48,14 @@ with h5py.File(orbit_path) as orbits:
 
 # Turn on/off binary creation & instrument simulation
 use_verbinaries = True
-run_new_simulation = False
+run_new_simulation = True
 gen_plots = True
 
 # Specify specific number of binaries
 Ngalbins = 16
 
 # Insert binary parameters
-amplitude_amplification = 1e4
+amplitude_amplification = 1e2
 
 if use_verbinaries:
     # Define name of simulation uitput file
@@ -137,7 +140,7 @@ cutoff = 100
 tmp = []
 #coeffs = scipy.signal.firls(73,bands=[0,1,1.2,2],desired=[1,1,0,0],fs=fs)
 #coeffs = scipy.signal.firls(73, bands=[0,1e-2,3e-2,5e-2], desired=[1,1,0,0],fs=fs)
-coeffs = scipy.signal.firls(73, bands=[0,1e-2,2e-2,fs/2], desired=[1,1,0,0],fs=fs)
+coeffs = scipy.signal.firls(73, bands=[0,1e-2,1.5e-2,fs/2], desired=[1,1,0,0],fs=fs)
 for i in range(1,4):
     fdata_tmp = scipy.signal.filtfilt(coeffs,1., x=sdata[i],padlen=len(psd[0]))
     tmp.append(fdata_tmp[cutoff:-cutoff])
@@ -187,7 +190,7 @@ Afunc, Efunc = BuildModelTDI(orbit_path,fs,size,Amp_true, f_true, phi0_true, gw_
 
 
 # Defining the model used for MCMC fitting
-def model(st, orbits_ZP=0,Amp=Amp_true, phi0=phi0_true, freq=f_true, gw_beta=gw_beta_true, gw_lambda=gw_lambda_true, t0=orbits_t0+10):
+def model(st, orbits_ZP=0,Amp=Amp_true, phi0=phi0_true, freq=f_true, gw_beta=gw_beta_true, gw_lambda=gw_lambda_true, t0=orbits_t0+1/fs):
     
     # Create random filename to allow for multiprocessing
     gwfn = 'gws_spam/gwtmp_'+str(int(1e20*np.random.rand(1)[0]))+'.h5'
@@ -219,9 +222,73 @@ def model(st, orbits_ZP=0,Amp=Amp_true, phi0=phi0_true, freq=f_true, gw_beta=gw_
     # Make sure that the model generates data at the correct time
     time_indices = np.where(np.in1d(nmt, st))[0]
     nnmt, nnmA, nnmE = nmt[time_indices], nmA[time_indices], nmE[time_indices]
-
+    
     return np.array([nnmt,nnmA,nnmE])
     # return np.array([t,A,E,T])
+
+
+# Define the likelyhood functions
+def lnL(theta, t, y1, y2):
+    """
+    The log likelihood of our simplistic Linear Regression. 
+    """
+    # Amp, f, phi0 = theta
+    # beta_ZP, Amp = theta[0], theta[1:]
+    # Amp_lnL, phi0_lnL = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
+    beta_ZP_lnL = np.copy(theta)
+    
+    # newt, y1_model, y2_model = model(t, Amp_lnL,phi0_lnL)
+    newt, y1_model, y2_model = model(t, beta_ZP_lnL)
+    
+    return 0.5*(np.sum((y1-y1_model)**2)) + 0.5*(np.sum((y2-y2_model)**2))
+
+def lnprior(theta):
+    """
+    Define a gaussian prior that preferences values near the observed values of the Galactic binaries     
+    """
+    # Amp, phi0 = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
+    
+    # beta_ZP, Amp = theta[0], theta[1:]
+    # Amp_lnprior, phi0_lnprior = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
+    beta_ZP_lnprior = np.copy(theta)
+    
+    # if (int(np.sum((1e-26 < Amp)*(Amp<1e-20))) == Ngalbins):# and -np.pi <= beta_ZP <= np.pi:
+    # if (int(np.sum((1e-26 < Amp_lnprior)*(Amp_lnprior<1e-20))) == Ngalbins) and int(np.sum((-np.pi <= phi0_lnprior)* (phi0_lnprior<= np.pi))) == Ngalbins:
+    if -np.pi <= beta_ZP_lnprior <= np.pi:
+        return 0
+    return np.inf
+    
+    # if 1e-18 < Amp < 1e-14:
+    #     return gauss_prior(f, obs_q[1]*obs_qe[1],obs_q[1])
+    # return -np.inf
+    # if int(np.sum((-np.pi <= phi0) * (phi0 <= np.pi))) == Ngalbins:
+    #     return np.sum(gauss_prior(Amp,Amp_prior[1],Amp_prior[0])) #gauss_prior(Amp, obs_q[0]*obs_qe[0], obs_q[0]) + gauss_prior(f, obs_q[1]*obs_qe[1],obs_q[1])
+    # return -np.inf
+    
+def lnprob(theta, t, y1, y2):
+    """
+    The likelihood to include in the MCMC.
+    """
+    # global iters
+    # iters +=1
+    
+    lp = lnprior(theta)
+    if not np.isfinite(lp):
+        # print (iters,'infty')
+        return np.inf
+    lnlikely = lp + lnL(theta,t,y1, y2)
+    # print (iters,lnlikely)
+    return lnlikely
+
+# Define the parabula functions
+def parabula_err(x0, xpm, fsdata):
+    """Finds error of likelyhood parabula. Input must be the optimal value and the offset from this for which to calculate the parabula. The output is sigma"""
+    f0 = lnprob([x0],fsdata[0],fsdata[1], fsdata[2])
+    fp, fm = lnprob([x0+xpm],fsdata[0],fsdata[1], fsdata[2]),lnprob([x0-xpm],fsdata[0],fsdata[1], fsdata[2])
+    
+    # print (f0,fp,fm, np.mean([fp,fm]))
+    return xpm/np.sqrt(np.abs(((fp+fm)/2) - f0))
+
 
 # Testing if model works and plotting 
 script_time0 = time.time()
@@ -247,5 +314,56 @@ if gen_plots:
             axs[i].set_xlim(.25,.5)
     plt.savefig("plots/Sample+Model_AETdata.jpg")
 
+print ("Optimal likelyhood = {}".format(lnprob([0],*fsdata[:3])))
 
-sigma = parabula_err(0,.01)
+#sigma = parabula_err(0,.01)
+
+# alpha = np.logspace(0,3,5) #array with n values between 1 and 1000 logarithmicly scaled
+alpha = np.array([1,10,100,1000,10000])
+N =5
+
+calculate_again = True
+sigmas = np.zeros((N,len(alpha)))
+# for i,alph in enumerate(alpha):
+for i,alph in enumerate(alpha):
+    sigmas_1a = np.zeros(N)
+    # for j in tqdm(range(N)):
+    for j in range(N):
+        # Generate the Galactic binaries
+        GenerateGalbins(orbit_path,gw_path,fs,size,Amp_true, f_true, phi0_true_forinst, gw_beta_true, gw_lambda_true, orbits_t0 + 10)
+
+        outputf = 'measurements/tm_asds_'+str(alph)
+
+        if calculate_again:
+            # Generate the instrument data
+            GenerateInstrumentAET(orbit_path, gw_path, fs, size, outputf, discard, False, sAfunc, sEfunc, sTfunc, tm_alpha=alph)
+
+        # Retreive A, E, T data
+        rawdata = ascii.read(outputf+'.txt')
+        sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E'],rawdata['T']])
+
+        # Filter sample data
+        tmp = []
+        for k in range(1,4):
+            fdata_tmp = scipy.signal.filtfilt(coeffs,1., x=sdata[k],padlen=len(psd[0]))
+            tmp.append(fdata_tmp[cutoff:-cutoff])
+        fsdata = np.array([sdata[0][cutoff:-cutoff],tmp[0],tmp[1],tmp[2]])
+
+        # Generate model data, calculate likelyhood, & error in region
+        sigma = parabula_err(0,.001,fsdata)
+        sigmas_1a[j] = sigma
+        print ("For alpha={}, sigma={:.2f}".format(alph,sigma))
+    print ("sigmas for alpha",alph,":",sigmas_1a)
+    sigmas[i] = sigmas_1a
+    
+    plt.figure(figsize=(8,6))
+    for j in range(i+1):
+        plt.scatter([alpha[j]]*5,sigmas[j],marker='.',c='b')
+    plt.xlabel("alpha")
+    plt.ylabel("sigmas")
+    plt.xscale("log")
+    plt.grid()
+    plt.title("alpha vs sigma")
+    plt.savefig("plots/AlphaVSigma"+str(i+1)+".jpg")
+print ("alpha values:",alpha)
+print ("Sigma values:",np.array(sigmas))

@@ -26,19 +26,23 @@ def GenerateGalbins(orbit_path,gw_path, fs, size, Amp_true, f_true, phi0_true, g
         source = GalacticBinary(A=a, f=f, phi0=p, orbits=orbit_path ,t0=t0, gw_beta=beta, gw_lambda=lamb, dt=1/fs, size=size+300)
         source.write(gw_path)
 
-def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard, genTDI=True, sAfunc = False, sEfunc = False, sTfunc = False):
+def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard, genTDI=True, sAfunc = False, sEfunc = False, sTfunc = False, tm_alpha=1):
     # Setup logger (sometimes useful to follow what's happening)
     # logging.basicConfig()
     # logging.getLogger('lisainstrument').setLevel(logging.INFO)
     print ("Starting simulation")
     
-    t0 = time.time()
+    tm_asds = { k: tm_alpha*2.4e-15 for k in Instrument.MOSAS}
+    # tm_asds['31'] = tm_alpha*2.4e-15
+    
+    t00 = time.time()
     sample_instru = Instrument(
         size=size, # in samples
         dt=1/fs,
         aafilter=('kaiser', 240, 0.275*fs, 0.725*fs),
         orbits=orbit_path, # realistic orbits (make sure it's consistent with glitches and GWs!)
-        gws=gw_path
+        gws=gw_path,
+        testmass_asds=tm_asds
     )
     # sample_instru.disable_all_noises()
     sample_instru.simulate()
@@ -49,12 +53,12 @@ def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard
         os.remove(sample_outputf+'.h5')
     sample_instru.write(sample_outputf+'.h5')
     
-    print ("Time to run simulation = {:.2f} s / {:.3f} hrs".format((time.time()-t0),(time.time()-t0)/3600))
     
     # Read data from LISA Instrument
     rawdata = Data.from_instrument(sample_outputf+'.h5')
     
     if genTDI:
+        print ("Time to run simulation = {:.2f} s / {:.3f} hrs".format((time.time()-t00),(time.time()-t00)/3600))
         t0 = time.time()
         sAfunc = ortho.A2.build(**rawdata.args)
         A = sAfunc(rawdata.measurements)[discard:]
@@ -72,14 +76,14 @@ def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard
         t0 = time.time()
         A = sAfunc(rawdata.measurements)[discard:]
         t1 = time.time()
-        print ("Time to run A2 = {:.2f} s / {:.3f} hrs".format((t1-t0),(t1-t0)/3600))
+        # print ("Time to run A2 = {:.2f} s / {:.3f} hrs".format((t1-t0),(t1-t0)/3600))
         E = sEfunc(rawdata.measurements)[discard:]
         t2 = time.time()
-        print ("Time to run E2 = {:.2f} s / {:.3f} hrs".format((t2-t1),(t2-t1)/3600))
+        # print ("Time to run E2 = {:.2f} s / {:.3f} hrs".format((t2-t1),(t2-t1)/3600))
         T = sTfunc(rawdata.measurements)[discard:]
         t3 = time.time()
-        print ("Time to run T2 = {:.2f} s / {:.3f} hrs".format((t3-t2),(t3-t2)/3600))
-
+        # print ("Time to run T2 = {:.2f} s / {:.3f} hrs".format((t3-t2),(t3-t2)/3600))
+    
     t = sample_instru.t[discard:]
     # t = (np.arange(0,len(A)+discard)/fs)[discard:]
 
@@ -90,8 +94,7 @@ def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard
     filecontent = Table(sdata.T, names=['t','A','E','T'])
     ascii.write(filecontent, filepath, overwrite=True)
 
-    t4 = time.time()
-    print ("Total time = {:.2f} s / {:.2f} hrs".format(t4-t0,(t4-t0)/3600))
+    print ("Total time for sample = {:.2f} s / {:.2f} hrs".format(time.time()-t00,(time.time()-t00)/3600))
     
     if genTDI:
         return sAfunc, sEfunc, sTfunc
@@ -150,64 +153,4 @@ def BuildModelTDI(orbit_path,fs,size,Amp_true, f_true, phi0_true, gw_beta_true, 
     return Afunc, Efunc
 
 
-# Define the likelyhood functions
-def lnL(theta, t, y1, y2):
-    """
-    The log likelihood of our simplistic Linear Regression. 
-    """
-    # Amp, f, phi0 = theta
-    # beta_ZP, Amp = theta[0], theta[1:]
-    # Amp_lnL, phi0_lnL = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
-    beta_ZP_lnL = np.copy(theta)
-    
-    # newt, y1_model, y2_model = model(t, Amp_lnL,phi0_lnL)
-    newt, y1_model, y2_model = model(t, beta_ZP_lnL)
-    
-    return 0.5*(np.sum((y1-y1_model)**2)) + 0.5*(np.sum((y2-y2_model)**2))
 
-def lnprior(theta):
-    """
-    Define a gaussian prior that preferences values near the observed values of the Galactic binaries     
-    """
-    # Amp, phi0 = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
-    
-    # beta_ZP, Amp = theta[0], theta[1:]
-    # Amp_lnprior, phi0_lnprior = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
-    beta_ZP_lnprior = np.copy(theta)
-    
-    # if (int(np.sum((1e-26 < Amp)*(Amp<1e-20))) == Ngalbins):# and -np.pi <= beta_ZP <= np.pi:
-    # if (int(np.sum((1e-26 < Amp_lnprior)*(Amp_lnprior<1e-20))) == Ngalbins) and int(np.sum((-np.pi <= phi0_lnprior)* (phi0_lnprior<= np.pi))) == Ngalbins:
-    if -np.pi <= beta_ZP_lnprior <= np.pi:
-        return 0
-    return np.inf
-    
-    # if 1e-18 < Amp < 1e-14:
-    #     return gauss_prior(f, obs_q[1]*obs_qe[1],obs_q[1])
-    # return -np.inf
-    # if int(np.sum((-np.pi <= phi0) * (phi0 <= np.pi))) == Ngalbins:
-    #     return np.sum(gauss_prior(Amp,Amp_prior[1],Amp_prior[0])) #gauss_prior(Amp, obs_q[0]*obs_qe[0], obs_q[0]) + gauss_prior(f, obs_q[1]*obs_qe[1],obs_q[1])
-    # return -np.inf
-    
-def lnprob(theta, t, y1, y2):
-    """
-    The likelihood to include in the MCMC.
-    """
-    # global iters
-    # iters +=1
-    
-    lp = lnprior(theta)
-    if not np.isfinite(lp):
-        # print (iters,'infty')
-        return np.inf
-    lnlikely = lp + lnL(theta,t,y1, y2)
-    # print (iters,lnlikely)
-    return lnlikely
-
-# Define the parabula functions
-def parabula_err(x0, xpm, fsdata):
-    """Finds error of likelyhood parabula. Input must be the optimal value and the offset from this for which to calculate the parabula. The output is sigma"""
-    f0 = lnprob([x0],fsdata[0],fsdata[1], fsdata[2])
-    fp, fm = lnprob([x0+xpm],fsdata[0],fsdata[1], fsdata[2]),lnprob([x0-xpm],fsdata[0],fsdata[1], fsdata[2])
-    
-    # print (f0,fp,fm, np.mean([fp,fm]))
-    return xpm/np.sqrt(((fp+fm)/2) - f0)
