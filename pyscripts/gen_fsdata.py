@@ -35,7 +35,7 @@ gw_path = 'gws.h5'
 # fs = 0.1    # Hz
 fs = 0.05    # Hz
 day = 86400 # s
-duration = day*30 # X days
+duration = day*180 # X days
 size = duration*fs
 discard = 300
 rec = ['A','E','T']
@@ -49,13 +49,14 @@ with h5py.File(orbit_path) as orbits:
 # Turn on/off binary creation & instrument simulation
 use_verbinaries = True
 run_new_simulation = True
-gen_plots = True
+gen_plots = False
+
 
 # Specify specific number of binaries
 Ngalbins = 16
 
 # Insert binary parameters
-amplitude_amplification = 50
+amplitude_amplification = 10
 
 if use_verbinaries:
     # Define name of simulation uitput file
@@ -187,164 +188,17 @@ if gen_plots:
     axs[i].set_xlim(xmin=9e-5,xmax=fs/1.9)#,xmax=1e-2)
     plt.savefig("plots/Sample_PSD.jpg")
 
-# Build the TDI chanels for model data
-Afunc, Efunc = BuildModelTDI(orbit_path,fs,size,Amp_true, f_true, phi0_true, gw_beta_true, gw_lambda_true,discard,detailed=False)
 
+# Generate the data for different alpha values
+# alpha = np.array([1,10,100,1000,10000])
+alpha = np.array([1,10,100,1000])
+N1 = 10
+calculate_again=True
 
-# Defining the model used for MCMC fitting
-def model(st, orbits_ZP=0,Amp=Amp_true, phi0=phi0_true, freq=f_true, gw_beta=gw_beta_true, gw_lambda=gw_lambda_true, t0=orbits_t0+1/fs):
-    
-    # Create random filename to allow for multiprocessing
-    gwfn = 'gws_spam/gwtmp_'+str(int(1e20*np.random.rand(1)[0]))+'.h5'
-    
-    # Amp, phi0 = theta[0:Ngalbins], theta[Ngalbins:2*Ngalbins]
-    
-    # Generate GW signals
-    for a, f, p, beta, lamb in zip(Amp, freq, phi0, gw_beta, gw_lambda):
-        GalBin = GalacticBinary(A=a/f, f=f, phi0=p, orbits=orbit_path, t0=t0, gw_beta=beta-orbits_ZP, gw_lambda=lamb, dt=1/fs, size=size+300)
-        # Amplitude is a/f since we have to convert from_gws to from_instr by differentiating and don't want extra factors of 2pi*f
-        GalBin.write(gwfn)
-    
-    # rawdata = Data.from_gws( 'gw_tmp.h5', orbit_path)
-    rawdata = Data.from_gws(gwfn, orbit_path,interpolate=True)
-    mA = Afunc(rawdata.measurements)[discard:]
-    mE = Efunc(rawdata.measurements)[discard:]
-    # If we only fit signal parameters, we don't include T since it has by definition no signal.
-    #T = Tfunc(rawdata.measurements)[discard:]
-    
-    mt = GalBin.t[discard:]
-    
-    os.remove(gwfn)
-    
-    # Generate correct amplitude to be compatible with sample data
-    nmt = np.copy(mt)[:-1]
-    nmA = dphi_to_dnu(fs,mA)
-    nmE = dphi_to_dnu(fs,mE)
-    
-    # Make sure that the model generates data at the correct time
-    time_indices = np.where(np.in1d(nmt, st))[0]
-    nnmt, nnmA, nnmE = nmt[time_indices], nmA[time_indices], nmE[time_indices]
-    
-    return np.array([nnmt,nnmA,nnmE])
-    # return np.array([t,A,E,T])
-
-
-# Define the likelyhood functions
-def lnL(theta, t, y1, y2):
-    """
-    The log likelihood of our simplistic Linear Regression. 
-    """
-    # Amp, f, phi0 = theta
-    # beta_ZP, Amp = theta[0], theta[1:]
-    # Amp_lnL, phi0_lnL = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
-    beta_ZP_lnL = np.copy(theta)
-    
-    # newt, y1_model, y2_model = model(t, Amp_lnL,phi0_lnL)
-    newt, y1_model, y2_model = model(t, beta_ZP_lnL)
-    
-    return 0.5*(np.sum((y1-y1_model)**2)) + 0.5*(np.sum((y2-y2_model)**2))
-
-def lnprior(theta):
-    """
-    Define a gaussian prior that preferences values near the observed values of the Galactic binaries     
-    """
-    # Amp, phi0 = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
-    
-    # beta_ZP, Amp = theta[0], theta[1:]
-    # Amp_lnprior, phi0_lnprior = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
-    beta_ZP_lnprior = np.copy(theta)
-    
-    # if (int(np.sum((1e-26 < Amp)*(Amp<1e-20))) == Ngalbins):# and -np.pi <= beta_ZP <= np.pi:
-    # if (int(np.sum((1e-26 < Amp_lnprior)*(Amp_lnprior<1e-20))) == Ngalbins) and int(np.sum((-np.pi <= phi0_lnprior)* (phi0_lnprior<= np.pi))) == Ngalbins:
-    if -np.pi <= beta_ZP_lnprior <= np.pi:
-        return 0
-    return np.inf
-    
-    # if 1e-18 < Amp < 1e-14:
-    #     return gauss_prior(f, obs_q[1]*obs_qe[1],obs_q[1])
-    # return -np.inf
-    # if int(np.sum((-np.pi <= phi0) * (phi0 <= np.pi))) == Ngalbins:
-    #     return np.sum(gauss_prior(Amp,Amp_prior[1],Amp_prior[0])) #gauss_prior(Amp, obs_q[0]*obs_qe[0], obs_q[0]) + gauss_prior(f, obs_q[1]*obs_qe[1],obs_q[1])
-    # return -np.inf
-    
-def lnprob(theta, t, y1, y2):
-    """
-    The likelihood to include in the MCMC.
-    """
-    # global iters
-    # iters +=1
-    
-    lp = lnprior(theta)
-    if not np.isfinite(lp):
-        # print (iters,'infty')
-        return np.inf
-    lnlikely = lp + lnL(theta,t,y1, y2)
-    # print (iters,lnlikely)
-    return lnlikely
-
-# Define the parabula functions
-
-def sig(x0,xpm,N,f0,fpm):
-    return xpm / np.sqrt(2*np.log((N-f0) / (N-fpm)))
-def parabula_err(x0, xpm, fsdata,L_on_range,f0):
-    """Finds error of likelyhood parabula. Input must be the optimal value and the offset from this for which to calculate the parabula. The output is sigma"""
-    med = np.median(L_on_range)
-    # f0 = lnprob([x0],fsdata[0],fsdata[1], fsdata[2])
-    fp, fm = lnprob([x0+xpm],fsdata[0],fsdata[1], fsdata[2]),lnprob([x0-xpm],fsdata[0],fsdata[1], fsdata[2])
-    print (med, f0, fp, fm)
-    return np.nanmean([sig(x0,xpm,med,f0,fp), sig(x0,xpm,med,f0,fm)])
-
-def parabula(x0, L_on_range,f0,sig):
-    N = np.median(L_on_range)
-    # A = lnprob([x0],fsdata[0],fsdata[1], fsdata[2]) - N
-    length = 2000
-    xrange = np.linspace(-np.pi,np.pi,length)
-    return xrange, N - (N-f0)*np.exp(-((xrange-x0)**2)/(2*(sig**2)))
-    # return xrange, N + (f0-N)*np.exp(((xrange-x0)**2)/(sig**2))
-
-
-# Testing if model works and plotting 
-script_time0 = time.time()
-
-mdata = model(fsdata[0])
-
-script_time1 = time.time() - script_time0
-print ("Time to run model once = {:.2f} s / {:.2f} min".format(script_time1,script_time1/60))
-
-
-if gen_plots:
-    fig, axs = plt.subplots(4, figsize=(16,8))#, sharex=True, gridspec_kw={'hspace':0})
-    axs[0].set_title("Sample and model data")
-    for i,j in zip(range(4),[0,0,1,1]):
-        axs[i].plot(fsdata[0]/day,fsdata[j+1],label='Channel '+rec[j])
-        axs[i].plot(mdata[0]/day,mdata[j+1],label='Channel '+rec[j])
-        axs[i].legend(loc=1)
-        axs[i].set_ylabel('Amplitude')
-        axs[i].set_xlabel('Time (d)')
-        if i%2 == 0:
-            axs[i].set_xlim(0,duration//day)
-        else:
-            axs[i].set_xlim(.25,.5)
-    plt.savefig("plots/Sample+Model_AETdata.jpg")
-
-print ("Optimal likelyhood = {}".format(lnprob([0],*fsdata[:3])))
-
-#sigma = parabula_err(0,.01)
-
-# alpha = np.logspace(0,3,5) #array with n values between 1 and 1000 logarithmicly scaled
-alpha = np.array([1,10,100,1000,10000])
-N1,N2 = 5, 31
-
-zp_range = np.pi*np.linspace(-1,1,N2)
-
-calculate_again = True
-sigmas = np.zeros((N1,len(alpha)))
 # for i,alph in enumerate(alpha):
 for i,alph in enumerate(alpha):
-    sigmas_1a = np.zeros(N1)
     # for j in tqdm(range(N)):
     fp = 'plots/'+str(int(alph))+'/'
-    L_range_1a = np.zeros((N1,N2))
     for j in range(N1):
         # Generate the Galactic binaries
         # GenerateGalbins(orbit_path,gw_path,fs,size,Amp_true, f_true, phi0_true_forinst, gw_beta_true, gw_lambda_true, orbits_t0 + 10)
@@ -355,7 +209,7 @@ for i,alph in enumerate(alpha):
             # Generate the instrument data
             # GenerateInstrumentAET(orbit_path, gw_path, fs, size, outputf, discard, False, sAfunc, sEfunc, sTfunc, tm_alpha=alph)
             GenerateInstrumentAET(orbit_path, gw_path, fs, size, outputf, discard, False, sAfunc, sEfunc, tm_alpha=alph)
-        os.remove(outputf+'.h5')
+            os.remove(outputf+'.h5')
         # Retreive A, E, T data
         rawdata = ascii.read(outputf+'.txt')
         # sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E'],rawdata['T']])
@@ -367,47 +221,9 @@ for i,alph in enumerate(alpha):
             fdata_tmp = scipy.signal.filtfilt(coeffs,1., x=sdata[k],padlen=len(psd[0]))
             tmp.append(fdata_tmp[cutoff:-cutoff])
         fsdata = np.array([sdata[0][cutoff:-cutoff],tmp[0],tmp[1]])
+        
+        filepath = 'measurements/tm_asds/'+str(duration//day)+'d/'+str(int(alph))+"/fs"+str(j)+'.txt'
+        # filecontent = Table(sdata.T, names=['t','A','E','T'])
+        filecontent = Table(fsdata.T, names=['t','A','E'])
+        ascii.write(filecontent, filepath, overwrite=True)
 
-        # Generate model data, calculate likelyhood for entire range, and calculate error in region
-        print ("Calculating likelyhood range")
-        L_range = np.zeros(N2)
-        for l,zp in enumerate(tqdm(zp_range)):
-            L_range[l] = lnprob([zp],fsdata[0],fsdata[1], fsdata[2])
-        
-        L_range_1a[j] = L_range
-        
-        sigma = parabula_err(0,0.05, fsdata, L_range, L_range[N2//2])
-        x,y = parabula(0,L_range, L_range[N2//2],sigma)
-        # print ("Time to calculate likelyhood range = {:.2f} s / {:.3f} hrs".format(time.time()-L_range_time0,(time.time()-L_range_time0)/3600))
-        
-        sigmas_1a[j] = sigma
-        print ("For alpha={}, sigma={:.2f}".format(alph,sigma))
-        
-        plt.figure(figsize=(8,6))
-        plt.plot(x,y,c='black',alpha=.8)
-        plt.plot(zp_range,L_range,marker='o',ls='--',c='r')
-        plt.xlabel("zp [rad]")
-        plt.ylabel("-ln(L)")
-        plt.title("Likelyhood range over ZP range for alpha {} and iteration {}".format(alph,j))
-        # plt.ylim(np.min(L_range),np.max(L_range))
-        plt.savefig(fp+"L_range_over_ZP_"+str(j)+".jpg")
-        
-    filename = "measurements/tm_asds/"+str(duration//day)+"d/L_range_a"+str(int(alph))+".txt"
-    # filecontent = Table(sdata.T, names=['t','A','E','T'])
-    filecontent = Table(L_range_1a.T, names=[j for j in range(N1)])
-    ascii.write(filecontent, filename, overwrite=True)
-    
-    print ("sigmas for alpha",alph,":",sigmas_1a)
-    sigmas[i] = sigmas_1a
-    
-    plt.figure(figsize=(8,6))
-    for j in range(i+1):
-        plt.scatter([alpha[j]]*5,sigmas[j],marker='.',c='b')
-    plt.xlabel("alpha")
-    plt.ylabel("sigmas")
-    plt.xscale("log")
-    plt.grid()
-    plt.title("alpha vs sigma")
-    plt.savefig("plots/AlphaVSigma"+str(i+1)+".jpg")
-print ("alpha values:",alpha)
-print ("Sigma values:",np.array(sigmas))

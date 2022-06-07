@@ -26,7 +26,8 @@ def GenerateGalbins(orbit_path,gw_path, fs, size, Amp_true, f_true, phi0_true, g
         source = GalacticBinary(A=a, f=f, phi0=p, orbits=orbit_path ,t0=t0, gw_beta=beta, gw_lambda=lamb, dt=1/fs, size=size+300)
         source.write(gw_path)
 
-def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard, genTDI=True, sAfunc = False, sEfunc = False, sTfunc = False, tm_alpha=1):
+# def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard, genTDI=True, sAfunc = False, sEfunc = False, sTfunc = False, tm_alpha=1):
+def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard, genTDI=True, sAfunc = False, sEfunc = False, tm_alpha=1):
     # Setup logger (sometimes useful to follow what's happening)
     # logging.basicConfig()
     # logging.getLogger('lisainstrument').setLevel(logging.INFO)
@@ -68,10 +69,10 @@ def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard
         E = sEfunc(rawdata.measurements)[discard:]
         t2 = time.time()
         print ("Time to build and run E2 = {:.2f} s / {:.3f} hrs".format((t2-t1),(t2-t1)/3600))
-        sTfunc = ortho.T2.build(**rawdata.args)
-        T = sTfunc(rawdata.measurements)[discard:]
-        t3 = time.time()
-        print ("Time to build and run T2 = {:.2f} s / {:.3f} hrs".format((t3-t2),(t3-t2)/3600))
+        # sTfunc = ortho.T2.build(**rawdata.args)
+        # T = sTfunc(rawdata.measurements)[discard:]
+        # t3 = time.time()
+        # print ("Time to build and run T2 = {:.2f} s / {:.3f} hrs".format((t3-t2),(t3-t2)/3600))
     else:
         t0 = time.time()
         A = sAfunc(rawdata.measurements)[discard:]
@@ -80,24 +81,27 @@ def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard
         E = sEfunc(rawdata.measurements)[discard:]
         t2 = time.time()
         # print ("Time to run E2 = {:.2f} s / {:.3f} hrs".format((t2-t1),(t2-t1)/3600))
-        T = sTfunc(rawdata.measurements)[discard:]
-        t3 = time.time()
+        # T = sTfunc(rawdata.measurements)[discard:]
+        # t3 = time.time()
         # print ("Time to run T2 = {:.2f} s / {:.3f} hrs".format((t3-t2),(t3-t2)/3600))
     
     t = sample_instru.t[discard:]
     # t = (np.arange(0,len(A)+discard)/fs)[discard:]
 
-    sdata = np.array([t,A,E,T])
+    # sdata = np.array([t,A,E,T])
+    sdata = np.array([t,A,E])
 
     # Extract A, E, T data to speed up re-running code.
     filepath = sample_outputf+'.txt'
-    filecontent = Table(sdata.T, names=['t','A','E','T'])
+    # filecontent = Table(sdata.T, names=['t','A','E','T'])
+    filecontent = Table(sdata.T, names=['t','A','E'])
     ascii.write(filecontent, filepath, overwrite=True)
 
     print ("Total time for sample = {:.2f} s / {:.2f} hrs".format(time.time()-t00,(time.time()-t00)/3600))
     
     if genTDI:
-        return sAfunc, sEfunc, sTfunc
+        # return sAfunc, sEfunc, sTfunc
+        return sAfunc, sEfunc
 
 def dphi_to_dnu(fs,data):
     laser_freq = 2.816E14 #Hz, gotten from lisainstrument code
@@ -152,5 +156,103 @@ def BuildModelTDI(orbit_path,fs,size,Amp_true, f_true, phi0_true, gw_beta_true, 
     
     return Afunc, Efunc
 
+def psd_func(data):
+    return scipy.signal.welch(data,fs=fs,window='nuttall',nperseg=len(data),detrend=False)
+
+class myGalacticBinary(GalacticBinary):
+    def __init__(self, A,f,orbits, gw_beta=0, gw_lambda=0,t0=None,**kwargs):
+        # make sure that the parent __init__ is called if orbit is a string
+        if isinstance(orbit,str):
+            super().__init__(A,f,orbits, gw_beta=gw_beta, gw_lambda=gw_lambda, **kwargs)
+        else:
+        # Create the auxilliary dictionaries that hold the interpolating functions:
+            pos={}
+            x={}
+            y={}
+            z={}
+            tt={}
+
+            # build a copy of the orbit times and extend it to the left and the right to make sure 
+            # that the interpolation does not run out of range
+            t = np.copy(orbits.t)
+            if t0 == None:
+                t0 = t[0]
+
+            t = np.insert(t,0, t0-orbits.dt)
+            t = np.insert(t,-1, t0+orbits.dt)
+
+            # build the coordinate interpolators
+            for sc in orbits.SC_INDICES:
+                pos[sc]=orbits.compute_spacecraft_position(sc,t)
+                x[f'{sc}']=interp1d(t, pos[sc][:,0])
+                y[f'{sc}']=interp1d(t,pos[sc][:,1])
+                z[f'{sc}']=interp1d(t,pos[sc][:,2])
+
+            # build the light-travel times for the links
+            for links in orbits.LINK_INDICES:
+                L = orbits.compute_light_travel_time(int(links[0]),int(links[1]),t)
+                tt[links] = interp1d(t, L)
+
+            # now call the parent __init_ with the right parameters
+            super().__init__(A, f, orbits='', gw_beta=gw_beta, gw_lambda=gw_lambda,
+                             x=x,y=y,z=z,tt=tt, t0=t[1], **kwargs)
+            
+class myInstrument(Instrument):
+    
+    def __init__(self,  orbits='static',gws=None, 
+                 t0='orbits',
+                 physics_upsampling=4,
+                 size=2592000, dt=1/4,
+                 **kwargs):
+        
+                # the follwoing code needs to be copied, unfortunately
+                # as it is not abstracted as a method
+                if t0 == 'orbits':
+                    self.t0=orbits.t[1]
+                else:
+                    self.t0 = t0
+
+                
+                # Physics sampling
+                self.size = int(size)
+                self.dt = float(dt)
+                self.fs = 1 / self.dt
+
+                self.physics_upsampling = int(physics_upsampling)
+                self.physics_size = self.size * self.physics_upsampling
+                self.physics_dt = self.dt / self.physics_upsampling
+                self.physics_fs = self.fs * self.physics_upsampling
+       
+                self.physics_t = self.t0 + np.arange(self.physics_size, dtype=np.float64) * self.physics_dt
+        
+                # call the parent's init() if both orbits and gws are strings, otherwise
+                # deal with it here
+                if not isinstance(gws, str) and not isinstance(orbits, str):
+                    # if only the orbit is a string, call the parent's init_orbit
+                    if isinstance(orbits,str):
+                        super().init_orbits(orbits, orbit_dataset)
+                    else:
+                        # so orbits is a memory structure. In this case we have to call the parent's init_orbit 
+                        # with the correct orbits
+                        self.orbits = { links: orbits.compute_light_travel_time(int(links[0]),int(links[1]),self.physics_t) for links in orbits.LINK_INDICES }
+
+                    # if only gws is a string, call the parents init_gws() and then pass it on tho __init__
+                    if isinstance(gws, str):
+                        super().init_gws(gws)
+                    else:
+                        # so gws is *not* a string, so we assume it is an object
+                        self.gws = { links: gws.compute_gw_response(links,self.physics_t)[0] for links in orbits.LINK_INDICES }
 
 
+                    # now we can call the parent's init() with the correctly formatted arguments    
+                    super().__init__(orbits=self.orbits, gws=self.gws,
+                                     physics_upsampling=physics_upsampling,
+                                     size=size, dt=dt,t0=self.t0,
+                                     **kwargs)
+
+                else:
+                    super.__init__( orbits=orbits, gws=gws,
+                                    physics_upsampling=physics_upsampling,
+                                    size=size, dt=dt, t0=self.t0,
+                                    **kwargs)
+        
