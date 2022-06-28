@@ -1,108 +1,9 @@
 # By Bart Ouwehand 12-04-2022
-import numpy as np
-import matplotlib.pyplot as plt
-import time
-import os
-
-from astropy.io import ascii
-from astropy.table import Table, Column, MaskedColumn
-
-from tqdm import tqdm
-# import seaborn as sns
-# plt.style.use('seaborn')
-
-
-# duration = np.array([1,5,10,30,60])
-# alpha = np.array([1,10,100,1000,10000])
-# duration = np.array([1,5,10,30])
-fs = 0.05 #hz
-day = 86400 #s
-# duration = np.array([1,5,10,30])
-duration = np.array([30,90,180])
-size = duration*fs*day
-
-
-# alpha = np.array([1,10,100,1000,10000])
-alpha = np.array([1,10,100,1000])
-
-N1, N2 = 10, 31 #number of samples and length of range iteration
+from my_functions import *
 
 calc_sigs = False
 
-
 if calc_sigs:
-    import h5py
-    import scipy.signal
-    import logging
-    import multiprocess
-
-    from lisagwresponse import GalacticBinary
-    # from lisainstrument import Instrument
-
-    from pytdi import Data
-    # from pytdi import michelson as mich
-    from pytdi import ortho
-
-    from astropy import units as u
-    from astropy.coordinates import SkyCoord
-    from astropy.coordinates import BarycentricMeanEcliptic
-
-    # Import own functions
-    from my_functions import *
-
-
-    orbit_path = '../../orbits/esa-orbits.h5'
-    gw_path = 'gws.h5'
-
-    discard = 300
-    rec = ['A','E','T']
-
-    with h5py.File(orbit_path) as orbits:
-        orbits_t0 = orbits.attrs['t0']
-        orbit_fs = 1/orbits.attrs['dt']
-        orbit_dur = orbits.attrs['tsize']/orbit_fs
-        print ("fs = "+str(fs)+" Hz,  orbit_duration = "+str(orbit_dur/day)+" d")
-
-    # Turn on/off binary creation & instrument simulation
-    use_verbinaries = True
-    tight_range = False
-
-    # Specify specific number of binaries
-    Ngalbins = 16
-
-    # Insert binary parameters
-    amplitude_amplification = 10
-
-    if use_verbinaries:
-        rawdata = ascii.read("../verbinaries_data_wsource_name.txt")
-
-        params = ['lGal', 'bGal', 'orbital_period', 'm1', 'm1e', 'm2', 'm2e', 'i', 'freq', 'par','epar', 'dis', 'edis', 'A', 'eA', 'SNR', 'eSNR']
-        # units: lGal [deg], bGal [deg], orbital_period [s], m1 [Msol], m1e [Msol], m2 [Msol], m2e [Msol]
-        # i [deg], freq (of gws) [mHz], par [mas], epar [mas], dis [pc], edis [pc], A [1e-23], eA [1e-23], SNR, eSNR
-
-        sourcenames = np.array(rawdata["source"])[:Ngalbins]
-        Amp_true = (np.array(rawdata["A"])* (1e-23 * amplitude_amplification))[:Ngalbins] # 10yokto to 1e-23 
-        f_true = (np.array(rawdata["freq"])* (1e-3))[:Ngalbins] # mHz to Hz
-        iota = np.deg2rad(np.array(rawdata["i"]))[:Ngalbins] # deg to rad
-
-        # Galactic coordinates of verification binaries   
-        source_gal_lon = np.array(rawdata["lGal"])[:Ngalbins]  # degree range from [0,360]
-        source_gal_lat = np.array(rawdata["bGal"])[:Ngalbins]  # degree range from [-90,90]
-
-        # Transform coordinates to (barycentric mean) ecliptic coordinates
-        gc = SkyCoord(l=source_gal_lon*u.degree, b=source_gal_lat*u.degree, frame='galactic')
-        gw_beta_true = np.deg2rad(gc.barycentricmeanecliptic.lon.value)[:Ngalbins] # degree to rad range [0,2pi]
-        gw_lambda_true = np.deg2rad(gc.barycentricmeanecliptic.lat.value)[:Ngalbins] # degree to rad range [-pi/2,pi/2]
-
-        # Transform coordinates to equatoral (ICRS) coordinates
-        # ra = gc.icrs.ra.value # degree range [0,360]
-        # dec = gc.icrs.dec.value # degree range [-90,90]
-
-        totNgalbins = len(sourcenames)
-        phi0_true_forinst = np.zeros(Ngalbins)
-        phi0_true = np.array(ascii.read("../verbinaries_phaseoffset_"+str(int(1/fs))+"dt.txt")['phi0'])[:Ngalbins]
-        print ("Number of Verification Binaries = {}".format(Ngalbins))
-
     # Defining the model used for MCMC fitting
     def model(st,orbits_ZP,Afunc,Efunc,s,Amp=Amp_true, phi0=phi0_true, freq=f_true, gw_beta=gw_beta_true, gw_lambda=gw_lambda_true, t0=orbits_t0+1/fs):
 
@@ -156,44 +57,6 @@ if calc_sigs:
 
         return 0.5*(np.sum((y1-y1_model)**2)) + 0.5*(np.sum((y2-y2_model)**2))
 
-    def lnprior(theta):
-        """
-        Define a gaussian prior that preferences values near the observed values of the Galactic binaries     
-        """
-        # Amp, phi0 = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
-
-        # beta_ZP, Amp = theta[0], theta[1:]
-        # Amp_lnprior, phi0_lnprior = theta[:Ngalbins], theta[Ngalbins:2*Ngalbins]
-        beta_ZP_lnprior = np.copy(theta)
-
-        # if (int(np.sum((1e-26 < Amp)*(Amp<1e-20))) == Ngalbins):# and -np.pi <= beta_ZP <= np.pi:
-        # if (int(np.sum((1e-26 < Amp_lnprior)*(Amp_lnprior<1e-20))) == Ngalbins) and int(np.sum((-np.pi <= phi0_lnprior)* (phi0_lnprior<= np.pi))) == Ngalbins:
-        if -np.pi <= beta_ZP_lnprior <= np.pi:
-            return 0
-        return np.inf
-
-        # if 1e-18 < Amp < 1e-14:
-        #     return gauss_prior(f, obs_q[1]*obs_qe[1],obs_q[1])
-        # return -np.inf
-        # if int(np.sum((-np.pi <= phi0) * (phi0 <= np.pi))) == Ngalbins:
-        #     return np.sum(gauss_prior(Amp,Amp_prior[1],Amp_prior[0])) #gauss_prior(Amp, obs_q[0]*obs_qe[0], obs_q[0]) + gauss_prior(f, obs_q[1]*obs_qe[1],obs_q[1])
-        # return -np.inf
-
-    def lnprob(theta, t, y1, y2,Afunc,Efunc,s):
-        """
-        The likelihood to include in the MCMC.
-        """
-        # global iters
-        # iters +=1
-
-        lp = lnprior(theta)
-        if not np.isfinite(lp):
-            # print (iters,'infty')
-            return np.inf
-        lnlikely = lp + lnL(theta,t,y1, y2,Afunc,Efunc,s)
-        # print (iters,lnlikely)
-        return lnlikely
-
     # Define the parabula functions
 
     def sig(x0,xpm,N,f0,fpm):
@@ -202,14 +65,14 @@ if calc_sigs:
     def parabula_err(x0, xpm, fsdata,L_on_range,f0,Afunc,Efunc,s):
         """Finds error of likelyhood parabula. Input must be the optimal value and the offset from this for which to calculate the parabula. The output is sigma"""
         med = np.median(L_on_range)
-        # f0 = lnprob([x0],fsdata[0],fsdata[1], fsdata[2])
-        fp, fm = lnprob([x0+xpm],fsdata[0],fsdata[1], fsdata[2],Afunc,Efunc,s),lnprob([x0-xpm],fsdata[0],fsdata[1], fsdata[2],Afunc,Efunc,s)
+        # f0 = lnL([x0],fsdata[0],fsdata[1], fsdata[2])
+        fp, fm = lnL([x0+xpm],fsdata[0],fsdata[1], fsdata[2],Afunc,Efunc,s),lnL([x0-xpm],fsdata[0],fsdata[1], fsdata[2],Afunc,Efunc,s)
         # print (med, f0, fp, fm)
         return np.nanmean([sig(x0,xpm,med,f0,fp), sig(x0,xpm,med,f0,fm)])
 
     def parabula(x0, L_on_range,f0,sig):
         N = np.median(L_on_range)
-        # A = lnprob([x0],fsdata[0],fsdata[1], fsdata[2]) - N
+        # A = lnL([x0],fsdata[0],fsdata[1], fsdata[2]) - N
         length = 2000
         xrange = np.linspace(-np.pi,np.pi,length)
         return xrange, N - (N-f0)*np.exp(-((xrange-x0)**2)/(2*(sig**2)))
@@ -308,7 +171,7 @@ for d,dr in enumerate(duration):
 # Make the plots of the likelyhood range
 def parabula(x0, L_on_range,f0,sig):
         N = np.median(L_on_range)
-        # A = lnprob([x0],fsdata[0],fsdata[1], fsdata[2]) - N
+        # A = lnL([x0],fsdata[0],fsdata[1], fsdata[2]) - N
         length = 2000
         xrange = np.linspace(-np.pi,np.pi,length)
         return xrange, N - (N-f0)*np.exp(-((xrange-x0)**2)/(2*(sig**2)))

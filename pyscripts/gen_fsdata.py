@@ -1,117 +1,18 @@
 # By Bart Ouwehand 12-04-2022
-import numpy as np
-import matplotlib.pyplot as plt
 
-import h5py
-import scipy.signal
-import logging
-import time
-import multiprocess
-import os
-
-from lisagwresponse import GalacticBinary
-from lisainstrument import Instrument
-
-from pytdi import Data
-from pytdi import michelson as mich
-from pytdi import ortho
-
-from astropy.io import ascii
-from astropy.table import Table, Column, MaskedColumn
-from astropy import units as u
-from astropy.coordinates import SkyCoord
-from astropy.coordinates import BarycentricMeanEcliptic
-
-from tqdm import tqdm
-
-# Import own functions
 from my_functions import *
 
+import gc
 
-orbit_path = '../../orbits/keplerian_long.h5'
-gw_path = 'gws.h5'
-
-# Setup simluation parameters
-# fs = 0.1    # Hz
-fs = 0.05    # Hz
-day = 86400 # s
-duration = day*180 # X days
-size = duration*fs
-discard = 300
-rec = ['A','E','T']
-
-with h5py.File(orbit_path) as orbits:
-    orbits_t0 = orbits.attrs['t0']
-    orbit_fs = 1/orbits.attrs['dt']
-    orbit_dur = orbits.attrs['tsize']/orbit_fs
-    print ("fs = "+str(fs)+" Hz,  orbit_duration = "+str(orbit_dur/day)+" d")
-
-# Turn on/off binary creation & instrument simulation
-use_verbinaries = True
-run_new_simulation = True
-gen_plots = False
-
-
-# Specify specific number of binaries
-Ngalbins = 16
-
-# Insert binary parameters
-amplitude_amplification = 10
-
-if use_verbinaries:
-    # Define name of simulation uitput file
-    sample_outputf = 'measurements/sampdat_'+str(duration//day)+'d'+'_verbins' #extention of .h5 or .txt added later
-    
-    rawdata = ascii.read("../verbinaries_data_wsource_name.txt")
-    
-    params = ['lGal', 'bGal', 'orbital_period', 'm1', 'm1e', 'm2', 'm2e', 'i', 'freq', 'par','epar', 'dis', 'edis', 'A', 'eA', 'SNR', 'eSNR']
-    # units: lGal [deg], bGal [deg], orbital_period [s], m1 [Msol], m1e [Msol], m2 [Msol], m2e [Msol]
-    # i [deg], freq (of gws) [mHz], par [mas], epar [mas], dis [pc], edis [pc], A [1e-23], eA [1e-23], SNR, eSNR
-    
-    sourcenames = np.array(rawdata["source"])[:Ngalbins]
-    Amp_true = (np.array(rawdata["A"])* (1e-23 * amplitude_amplification))[:Ngalbins] # 10yokto to 1e-23 
-    f_true = (np.array(rawdata["freq"])* (1e-3))[:Ngalbins] # mHz to Hz
-    iota = np.deg2rad(np.array(rawdata["i"]))[:Ngalbins] # deg to rad
-    
-    # Galactic coordinates of verification binaries   
-    source_gal_lon = np.array(rawdata["lGal"])[:Ngalbins]  # degree range from [0,360]
-    source_gal_lat = np.array(rawdata["bGal"])[:Ngalbins]  # degree range from [-90,90]
-
-    # Transform coordinates to (barycentric mean) ecliptic coordinates
-    gc = SkyCoord(l=source_gal_lon*u.degree, b=source_gal_lat*u.degree, frame='galactic')
-    gw_beta_true = np.deg2rad(gc.barycentricmeanecliptic.lon.value)[:Ngalbins] # degree to rad range [0,2pi]
-    gw_lambda_true = np.deg2rad(gc.barycentricmeanecliptic.lat.value)[:Ngalbins] # degree to rad range [-pi/2,pi/2]
-
-    # Transform coordinates to equatoral (ICRS) coordinates
-    # ra = gc.icrs.ra.value # degree range [0,360]
-    # dec = gc.icrs.dec.value # degree range [-90,90]
-    
-    totNgalbins = len(sourcenames)
-    phi0_true_forinst = np.zeros(Ngalbins)
-    phi0_true = np.array(ascii.read("../verbinaries_phaseoffset_"+str(int(1/fs))+"dt.txt")['phi0'])[:Ngalbins]
-    print ("Number of Verification Binaries = {}".format(Ngalbins))
-
-else:
-    # Define name of simulation uitput file
-    sample_outputf = 'measurements/MCMCsample'+str(int(duration))+'s' #extention of .h5 or .txt added later
-    
-    totNgalbins = 2
-    Amp_true = np.array([1e-16,5e-13])[:Ngalbins]
-    f_true = np.array([1e-3,1e-4])[:Ngalbins]
-    
-    phi0_true_forinst = np.zeros(Ngalbins)
-    phi0_true = np.array([-0.4,0.2])[:Ngalbins]
-    gw_beta_true = np.array([0,0])[:Ngalbins]
-    gw_lambda_true = np.array([0,np.pi])[:Ngalbins]
-
+d,dr = -1,dur_range[-1]
 
 if run_new_simulation:
     # Generate the Galactic binaries
-    GenerateGalbins(orbit_path,gw_path,fs,size,Amp_true, f_true, phi0_true_forinst, gw_beta_true, gw_lambda_true, orbits_t0 + 10)
+    GenerateGalbins(orbit_path,gw_path,fs,size[d],Amp_true, f_true, phi0_true_forinst, gw_beta_true, gw_lambda_true, orbits_t0 + 1/fs)
     
     # Generate the instrument data
     # sAfunc, sEfunc, sTfunc = GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard)
-    sAfunc, sEfunc = GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard)
+    sAfunc, sEfunc = GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], sample_outputf, discard)
 
 # Retreive A, E, T data
 rawdata = ascii.read(sample_outputf+'.txt')
@@ -122,7 +23,7 @@ sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E']])
 if gen_plots:
     for i in range(2):
         plt.plot(sdata[0]/day,sdata[i+1],label=rec[i],alpha=.5)
-    plt.title('AET datastreams for '+str(duration//day)+'d simulation with all noises')
+    plt.title('AET datastreams for '+str(dr)+'d simulation with all noises')
     plt.legend(loc=4)
     plt.xlabel('Time (d)')
     plt.ylabel('Amplitude')
@@ -158,7 +59,7 @@ fpsd = np.array([ftmp,tmp[0],tmp[1]])
 
 if gen_plots:
     fig, axs = plt.subplots(2, figsize=(16,4), sharex=True, gridspec_kw={'hspace':0})
-    fig.suptitle("Filtered datastreams for a "+str(duration//day)+" day simulation")
+    fig.suptitle("Filtered datastreams for a "+str(dr)+" day simulation")
     for i in range(2):
         axs[i].plot(fsdata[0]/day,fsdata[i+1],label='Channel '+rec[i])
         axs[i].legend(loc=1)
@@ -191,25 +92,22 @@ if gen_plots:
 
 # Generate the data for different alpha values
 # alpha = np.array([1,10,100,1000,10000])
-alpha = np.array([1,10,100,1000])
-N1 = 10
-calculate_again=True
 
-# for i,alph in enumerate(alpha):
 for i,alph in enumerate(alpha):
-    # for j in tqdm(range(N)):
+# for j in tqdm(range(N)):
     fp = 'plots/'+str(int(alph))+'/'
     for j in range(N1):
         # Generate the Galactic binaries
         # GenerateGalbins(orbit_path,gw_path,fs,size,Amp_true, f_true, phi0_true_forinst, gw_beta_true, gw_lambda_true, orbits_t0 + 10)
 
-        outputf = 'measurements/tm_asds/'+str(duration//day)+'d/'+str(int(alph))+"/s"+str(j)
+        outputf = ext+'measurements/tm_asds/'+str(dr)+'d/'+str(int(alph))+"/s"+str(j)
         
         if calculate_again:
             # Generate the instrument data
             # GenerateInstrumentAET(orbit_path, gw_path, fs, size, outputf, discard, False, sAfunc, sEfunc, sTfunc, tm_alpha=alph)
-            GenerateInstrumentAET(orbit_path, gw_path, fs, size, outputf, discard, False, sAfunc, sEfunc, tm_alpha=alph)
-            os.remove(outputf+'.h5')
+            GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], outputf, discard, False, sAfunc, sEfunc, tm_alpha=alph, noise=True)
+            # GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], outputf, discard, False, sAfunc, sEfunc, tm_alpha=alph,noise=False)
+            # os.remove(outputf+'.h5')
         # Retreive A, E, T data
         rawdata = ascii.read(outputf+'.txt')
         # sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E'],rawdata['T']])
@@ -222,8 +120,11 @@ for i,alph in enumerate(alpha):
             tmp.append(fdata_tmp[cutoff:-cutoff])
         fsdata = np.array([sdata[0][cutoff:-cutoff],tmp[0],tmp[1]])
         
-        filepath = 'measurements/tm_asds/'+str(duration//day)+'d/'+str(int(alph))+"/fs"+str(j)+'.txt'
+        filepath = ext+'measurements/tm_asds/'+str(dr)+'d/'+str(int(alph))+"/fs"+str(j)+'.txt'
         # filecontent = Table(sdata.T, names=['t','A','E','T'])
         filecontent = Table(fsdata.T, names=['t','A','E'])
         ascii.write(filecontent, filepath, overwrite=True)
 
+print ("RAM usage before clearing {} %".format(psutil.virtual_memory()[2]))
+gc.collect()
+print ("RAM usage after clearing {} %".format(psutil.virtual_memory()[2]))
