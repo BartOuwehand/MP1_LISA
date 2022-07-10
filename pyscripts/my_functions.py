@@ -11,11 +11,12 @@ def GenerateGalbins(orbit_path,gw_path, fs, size, Amp_true, f_true, phi0_true, g
         source.write(gw_path)
 
 # def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard, genTDI=True, sAfunc = False, sEfunc = False, sTfunc = False, tm_alpha=1):
-def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard, genTDI=True, sAfunc = False, sEfunc = False, tm_alpha=1,noise=True):
+def GenerateInstrumentAET(orbit_path, gw_path, fs, size, discard, genTDI=True, sAfunc = False, sEfunc = False, tm_alpha=1, noise=True, printing=True):
     # Setup logger (sometimes useful to follow what's happening)
     # logging.basicConfig()
     # logging.getLogger('lisainstrument').setLevel(logging.INFO)
-    print ("Starting simulation")
+    if printing:
+        print ("Starting simulation")
     
     tm_asds = { k: np.sqrt(tm_alpha)*2.4e-15 for k in Instrument.MOSAS}
     # tm_asds['31'] = tm_alpha*2.4e-15
@@ -27,7 +28,8 @@ def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard
         aafilter=('kaiser', 240, 0.275*fs, 0.725*fs),
         orbits=orbit_path, # realistic orbits (make sure it's consistent with glitches and GWs!)
         gws=gw_path,
-        testmass_asds=tm_asds
+        testmass_asds=tm_asds,
+        oms_asds = np.array([6.35e-12, 1.25e-11, 1.42e-12, 3.38e-12, 3.32e-12, 7.9e-12])*np.sqrt(tm_alpha)
     )
     if not noise:
         sample_instru.disable_all_noises()
@@ -78,16 +80,19 @@ def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard
     sdata = np.array([t,A,E])
 
     # Extract A, E, T data to speed up re-running code.
-    filepath = sample_outputf+'.txt'
-    # filecontent = Table(sdata.T, names=['t','A','E','T'])
-    filecontent = Table(sdata.T, names=['t','A','E'])
-    ascii.write(filecontent, filepath, overwrite=True)
+    # filepath = sample_outputf+'.txt'
+    # # filecontent = Table(sdata.T, names=['t','A','E','T'])
+    # filecontent = Table(sdata.T, names=['t','A','E'])
+    # ascii.write(filecontent, filepath, overwrite=True)
 
-    print ("Total time for sample = {:.2f} s / {:.2f} hrs".format(time.time()-t00,(time.time()-t00)/3600))
+    if printing:
+        print ("Total time for sample = {:.2f} s / {:.2f} hrs".format(time.time()-t00,(time.time()-t00)/3600))
     
     if genTDI:
         # return sAfunc, sEfunc, sTfunc
-        return sAfunc, sEfunc
+        return sdata, sAfunc, sEfunc
+    else:
+        return sdata
 
 def dphi_to_dnu(fs,data):
     laser_freq = 2.816E14 #Hz, gotten from lisainstrument code

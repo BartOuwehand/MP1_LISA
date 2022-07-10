@@ -54,16 +54,18 @@ day = 86400 # s
 
 
 if alice_test:
-    dur_range = np.array([5])
+    dur_range = np.array([10])
+    # dur_range = np.array([10])
     alpha = np.array([1])
     N1, N2 = 1,31
 else:
-    dur_range = np.array([5])
-    # dur_range = np.array([10,30,90,180])
+    # dur_range = np.array([5])
+    dur_range = np.array([10,30,90,180])
     # Defining alpha to iterate over
     # alpha = np.array([1,10,100])#,10,100,1000])
+    alpha = np.array([-4,-2,0,2,4])
     alpha = np.array([1,10,100,1000,10000])
-    N1,N2 = 10, 11
+    N1,N2 = 10, 31
 
 
 
@@ -71,6 +73,8 @@ duration = day*dur_range # X days
 size = duration*fs
 discard = 300
 rec = ['A','E','T']
+
+alpha_name = str(int())
 
 # Define the orbit, sample 10x a day and let it extend 110% of the duration of the simulation
 # orbits_t0 = 0
@@ -91,7 +95,7 @@ calculate_again = True
 
 # Specify specific number of binaries & import their parameters
 Ngalbins = 1
-amplitude_amplification = 1e8
+amplitude_amplification = 1
 
 if use_verbinaries:
     # Define name of simulation uitput file
@@ -141,4 +145,4 @@ else:
 
 # Amp_range = (Amp_true * (np.array((list(np.linspace(0.1,2.5,N2))*Ngalbins)).reshape(Ngalbins,N2)).T).T
 # Amp_range = (Amp_true * (np.array((list(np.linspace(0.1,1.9,N2))*Ngalbins)).reshape(Ngalbins,N2)).T).T
-Amp_range = (Amp_true * (np.array((list(np.logspace(-3,3,N2))*Ngalbins)).reshape(Ngalbins,N2)).T).T
+Amp_range = (Amp_true * (np.array((list(np.logspace(-2,2,N2))*Ngalbins)).reshape(Ngalbins,N2)).T).T

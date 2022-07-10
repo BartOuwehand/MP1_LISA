@@ -6,18 +6,21 @@ import gc
 
 d,dr = -1,dur_range[-1]
 
+gen_fsdata = True
+gen_mdata = True
+
 if run_new_simulation:
     # Generate the Galactic binaries
     GenerateGalbins(orbit_path,gw_path,fs,size[d],Amp_true, f_true, phi0_true_forinst, gw_beta_true, gw_lambda_true, orbits_t0 + 1/fs)
     
     # Generate the instrument data
     # sAfunc, sEfunc, sTfunc = GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard)
-    sAfunc, sEfunc = GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], sample_outputf, discard)
+    sdata, sAfunc, sEfunc = GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], discard)
 
 # Retreive A, E, T data
-rawdata = ascii.read(sample_outputf+'.txt')
-# sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E'],rawdata['T']])
-sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E']])
+# rawdata = ascii.read(sample_outputf+'.txt')
+# # sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E'],rawdata['T']])
+# sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E']])
 
 # Plot raw data retreived from AET datastream
 if gen_plots:
@@ -92,39 +95,57 @@ if gen_plots:
 
 # Generate the data for different alpha values
 # alpha = np.array([1,10,100,1000,10000])
+if gen_fsdata:
+    for i,alph in enumerate(alpha):
+    # for j in tqdm(range(N)):
+        fp = 'plots/'+str(int(alph))+'/'
+        print ("Start calculations for duration {}, alpha {} (RAM usage = {} %)".format(dr,alph,psutil.virtual_memory()[2]))
+        for j in tqdm(range(N1)):
 
-for i,alph in enumerate(alpha):
-# for j in tqdm(range(N)):
-    fp = 'plots/'+str(int(alph))+'/'
-    for j in range(N1):
-        # Generate the Galactic binaries
-        # GenerateGalbins(orbit_path,gw_path,fs,size,Amp_true, f_true, phi0_true_forinst, gw_beta_true, gw_lambda_true, orbits_t0 + 10)
+            outputf = ext+'measurements/tm_asds/'+str(dr)+'d/'+str(int(alph))+"/s"+str(j)
 
-        outputf = ext+'measurements/tm_asds/'+str(dr)+'d/'+str(int(alph))+"/s"+str(j)
-        
-        if calculate_again:
-            # Generate the instrument data
-            # GenerateInstrumentAET(orbit_path, gw_path, fs, size, outputf, discard, False, sAfunc, sEfunc, sTfunc, tm_alpha=alph)
-            GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], outputf, discard, False, sAfunc, sEfunc, tm_alpha=alph, noise=True)
-            # GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], outputf, discard, False, sAfunc, sEfunc, tm_alpha=alph,noise=False)
-            # os.remove(outputf+'.h5')
-        # Retreive A, E, T data
-        rawdata = ascii.read(outputf+'.txt')
-        # sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E'],rawdata['T']])
-        sdata = np.array([rawdata['t'],rawdata['A'],rawdata['E']])
+            GenerateGalbins(orbit_path, gw_path, fs, size[d], Amp_true, f_true, phi0_true_forinst, gw_beta_true, gw_lambda_true, orbits_t0 + 1/fs)
 
-        # Filter sample data
+            # Enable or disable the noise for testing
+            sdata = GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], discard, False, sAfunc, sEfunc, tm_alpha=1e-4, noise=True, printing=False)
+            # sdata = GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], discard, False, sAfunc, sEfunc, tm_alpha=alph, noise=False, printing=False)
+            
+            # Filter sample data
+            tmp = []
+            for k in range(1,3):
+                fdata_tmp = scipy.signal.filtfilt(coeffs,1., x=sdata[k],padlen=len(psd[0]))
+                tmp.append(fdata_tmp[cutoff:-cutoff])
+            fsdata = np.array([sdata[0][cutoff:-cutoff],tmp[0],tmp[1]])
+            
+            # Write fsdata to a file
+            filepath = ext+'measurements/tm_asds/'+str(dr)+'d/'+str(int(alph))+"/fs"+str(j)+'.txt'
+            filecontent = Table(fsdata.T, names=['t','A','E'])
+            ascii.write(filecontent, filepath, overwrite=True)
+
+print ("Start mdata calculation")
+if gen_mdata:
+    # Ready to generate the model data!
+    fp = ext+'measurements/tm_asds/'+str(dr)+'d/'
+    fp2 = 'plots/'+str(dr)+'d/mdata/'
+    
+    for a, f, p, beta, lamb,i in tqdm(zip(Amp_true, f_true, phi0_true, gw_beta_true, gw_lambda_true,range(Ngalbins)),total=Ngalbins):
+        # a = 1 and p = 0 (for instrument parameters)
+        GenerateGalbins(orbit_path, gw_path, fs, size[d], [1], [f], [0], [beta], [lamb], orbits_t0 + 1/fs)
+
+        mdata = GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], discard, False, sAfunc, sEfunc, noise=False, printing=False)
+
+
+        # Filter model data to all the steps be equal the fsdata
         tmp = []
         for k in range(1,3):
-            fdata_tmp = scipy.signal.filtfilt(coeffs,1., x=sdata[k],padlen=len(psd[0]))
-            tmp.append(fdata_tmp[cutoff:-cutoff])
-        fsdata = np.array([sdata[0][cutoff:-cutoff],tmp[0],tmp[1]])
+            fmdata_tmp = scipy.signal.filtfilt(coeffs,1., x=mdata[k],padlen=len(psd[0]))
+            tmp.append(fmdata_tmp[cutoff:-cutoff])
+        fmdata = np.array([mdata[0][cutoff:-cutoff],tmp[0],tmp[1]])
         
-        filepath = ext+'measurements/tm_asds/'+str(dr)+'d/'+str(int(alph))+"/fs"+str(j)+'.txt'
+        # Write mdata to a file
+        filepath = fp+"mdata/binary_"+str(i)+".txt"
         # filecontent = Table(sdata.T, names=['t','A','E','T'])
-        filecontent = Table(fsdata.T, names=['t','A','E'])
+        filecontent = Table(fmdata.T, names=['t','A','E'])
         ascii.write(filecontent, filepath, overwrite=True)
 
-print ("RAM usage before clearing {} %".format(psutil.virtual_memory()[2]))
-gc.collect()
-print ("RAM usage after clearing {} %".format(psutil.virtual_memory()[2]))
+print ("Final RAM usage {} %".format(psutil.virtual_memory()[2]))

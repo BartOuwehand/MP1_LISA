@@ -70,6 +70,10 @@ def indiv_mdata(orbit_path,gw_path,Afunc,Efunc,s,discard,cutoff):
 # Ready to generate the model data!
 fp = ext+'measurements/tm_asds/'+str(dr)+'d/'
 fp2 = 'plots/'+str(dr)+'d/mdata/'
+
+# TEMPORARILY TRY THIS METHOD
+# N2, Amp_range = 1, [[1]]
+
 # Generate the datafiles for the different binaries
 for a, f, p, beta, lamb,i in zip(Amp_true, f_true, phi0_true, gw_beta_true, gw_lambda_true,range(Ngalbins)):
     
@@ -78,10 +82,24 @@ for a, f, p, beta, lamb,i in zip(Amp_true, f_true, phi0_true, gw_beta_true, gw_l
     mdata_1b = np.zeros((1+N2*2,int(size[d]-500)))
     print ("Calculating mdata for binary {}".format(i+1))
     for j,Amp in enumerate(tqdm(Amp_range[i])):
-        # Amp, f, p, beta, lamb,
-        GenerateGalbins(orbit_path,gw_path,fs,size[d],[Amp], [f], [0], [beta], [lamb], orbits_t0 + 1/fs)
+    # for j,Amp in enumerate([1]):
+        GenerateGalbins(orbit_path, gw_path, fs, size[d], [Amp], [f], [0], [beta], [lamb], orbits_t0 + 1/fs)
         
-        mdata_tmp = indiv_mdata(orbit_path, gw_path,sAfunc, sEfunc, size[d], discard,cutoff)
+        # Try something different
+        # mdata_tmp = indiv_mdata(orbit_path, gw_path,sAfunc, sEfunc, size[d], discard,cutoff)
+        outputf = 'measurements/test_mdatav2'
+        GenerateInstrumentAET(orbit_path, gw_path, fs, size[d], outputf, discard, False, sAfunc, sEfunc, noise=False)
+        rawdata = ascii.read(outputf+'.txt')
+        os.remove(outputf+'.txt')
+        mdata_tmptmp = np.array([rawdata['t'],rawdata['A'],rawdata['E']])#[:,cutoff:-cutoff]
+        
+        # Filter sample data
+        tmp = []
+        for k in range(1,3):
+            fdata_tmp = scipy.signal.filtfilt(coeffs,1., x=mdata_tmptmp[k],padlen=len(psd[0]))
+            tmp.append(fdata_tmp[cutoff:-cutoff])
+        mdata_tmp = np.array([mdata_tmptmp[0][cutoff:-cutoff],tmp[0],tmp[1]])
+        
         mdata_1b[0] = mdata_tmp[0]
         mdata_1b[1+2*j:3+2*j] = mdata_tmp[1:]
     
@@ -100,6 +118,7 @@ for a, f, p, beta, lamb,i in zip(Amp_true, f_true, phi0_true, gw_beta_true, gw_l
     # plt.plot(x,y,c='black',alpha=.8)
     for k in range(2):
         for j,Amp in enumerate(Amp_range[i]):
+        # for j,Amp in enumerate([1]):
             axs[k].plot(mdata_1b[0]/day,mdata_1b[1+2*j+k],label='{:.3f} A$_0$'.format(Amp/a))
         axs[k].set_ylabel("{} amplitude".format(rec[k]))
     axs[0].set_title("Model data for binary {} at different amplitudes for duration {} d".format(i,dr))
