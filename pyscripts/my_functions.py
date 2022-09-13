@@ -1,17 +1,18 @@
 # By Bart Ouwehand 08-06-2022
 from config import *
 
-def GenerateGalbins(orbit_path,gw_path, fs, size, Amp_true, f_true, phi0_true, gw_beta_true, gw_lambda_true, t0):
+def GenerateGalbins(orbit_path,gw_path, fs, size, Amp_true, f_true, phi0_true, gw_beta_true, gw_lambda_true, iota_true, t0):
     """Generates a new file gw_path with N galactic binaries. Input is orbit_path(str): path to orbits file, gw_path(str): filepath+extension, fs(float): sampling frequency, size(int): size of samples, Amp_true(N-array): gw amplitudes, f_true(N-array): gw frequencies, phi0_true(N-array): gw initial phases, gw_beta_true(N-array): gw galactic longitude coords, gw_lambda_true(N-array): gw galactic lattitude, t0(N-array): start of signal"""
     # print ("Generating gravitational waves")
     if os.path.exists(gw_path):
         os.remove(gw_path)
-    for gba, gbf, gbp, gbbeta, gblamb in zip(Amp_true, f_true, phi0_true, gw_beta_true, gw_lambda_true):
-        source = GalacticBinary(A=gba, f=gbf, phi0=gbp, orbits=orbit_path ,t0=t0, gw_beta=gbbeta, gw_lambda=gblamb, dt=1/fs, size=size+300)
+    for gba, gbf, gbp, gbbeta, gblamb, iota in zip(Amp_true, f_true, phi0_true, gw_beta_true, gw_lambda_true, iota_true):
+        source = GalacticBinary(A=gba, f=gbf, phi0=gbp, orbits=orbit_path ,t0=t0, gw_beta=gbbeta, gw_lambda=gblamb, iota=iota, dt=1/fs, size=size+300)
+        # source = GalacticBinary(A=gba, f=gbf, phi0=gbp, orbits=orbit_path ,t0=t0, gw_beta=gbbeta, gw_lambda=gblamb, dt=1/fs, size=size+300)
         source.write(gw_path)
 
 # def GenerateInstrumentAET(orbit_path, gw_path, fs, size, sample_outputf, discard, genTDI=True, sAfunc = False, sEfunc = False, sTfunc = False, tm_alpha=1):
-def GenerateInstrumentAET(orbit_path, gw_path, fs, size, discard, genTDI=True, sAfunc = False, sEfunc = False, tm_alpha=1, noise=True, printing=True):
+def GenerateInstrumentAET(orbit_path, gw_path, fs, size, discard, genTDI=True, sAfunc = False, sEfunc = False, tm_alpha=1, OMS_alpha=1, noise=True, printing=True,turnoff = None):
     # Setup logger (sometimes useful to follow what's happening)
     # logging.basicConfig()
     # logging.getLogger('lisainstrument').setLevel(logging.INFO)
@@ -29,64 +30,63 @@ def GenerateInstrumentAET(orbit_path, gw_path, fs, size, discard, genTDI=True, s
         orbits=orbit_path, # realistic orbits (make sure it's consistent with glitches and GWs!)
         gws=gw_path,
         testmass_asds=tm_asds,
-        oms_asds = np.array([6.35e-12, 1.25e-11, 1.42e-12, 3.38e-12, 3.32e-12, 7.9e-12])*np.sqrt(tm_alpha)
+        oms_asds = np.array([6.35e-12, 1.25e-11, 1.42e-12, 3.38e-12, 3.32e-12, 7.9e-12])*np.sqrt(OMS_alpha)
     )
     if not noise:
+        # noises = ['laser', 'modulation', 'clock', 'pathlength', 'ranging', 'jitters']
+        # sample_instru.disable_all_noises(but='laser')
+        # laser, clock and pathlength noise dominate but only pathlength is influenced by oms and tm_asds noise
         sample_instru.disable_all_noises()
+        
+    if noise and turnoff is not None:
+        if 'laser' in turnoff:
+            sample_instru.laser_asds = ForEachMOSA(0)
+        if 'modulation' in turnoff:
+            sample_instru.modulation_asds = ForEachMOSA(0)
+        if 'clock' in turnoff:
+            sample_instru.disable_clock_noises()
+        if 'pathlength' in turnoff:
+            sample_instru.disable_pathlength_noises()
+        if 'ranging' in turnoff:
+            sample_instru.disable_ranging_noises()
+        if 'jitters' in turnoff:
+            sample_instru.disable_jitters()
+    
     sample_instru.simulate()
     
     
-    # Write out data to sample file, NOTE: Remember to remove the old sample file.
-    # if os.path.exists(sample_outputf+'.h5'):
-    #     os.remove(sample_outputf+'.h5')
-    # sample_instru.write(sample_outputf+'.h5')
-    
-    
     # Read data from LISA Instrument
-    # rawdata = Data.from_instrument(sample_outputf+'.h5')
     rawdata = Data.from_instrument(sample_instru)
     
     if genTDI:
         print ("Time to run simulation = {:.2f} s / {:.3f} hrs".format((time.time()-t00),(time.time()-t00)/3600))
         t0 = time.time()
         sAfunc = ortho.A2.build(**rawdata.args)
-        A = sAfunc(rawdata.measurements)[discard:]
+        A = sAfunc(rawdata.measurements)[300:]
         t1 = time.time()
         print ("Time to build and run A2 = {:.2f} s / {:.3f} hrs".format((t1-t0),(t1-t0)/3600))
         sEfunc = ortho.E2.build(**rawdata.args)
-        E = sEfunc(rawdata.measurements)[discard:]
+        E = sEfunc(rawdata.measurements)[300:]
         t2 = time.time()
         print ("Time to build and run E2 = {:.2f} s / {:.3f} hrs".format((t2-t1),(t2-t1)/3600))
-        # sTfunc = ortho.T2.build(**rawdata.args)
-        # T = sTfunc(rawdata.measurements)[discard:]
-        # t3 = time.time()
-        # print ("Time to build and run T2 = {:.2f} s / {:.3f} hrs".format((t3-t2),(t3-t2)/3600))
     else:
         t0 = time.time()
-        A = sAfunc(rawdata.measurements)[discard:]
+        A = sAfunc(rawdata.measurements)[300:]
         t1 = time.time()
-        # print ("Time to run A2 = {:.2f} s / {:.3f} hrs".format((t1-t0),(t1-t0)/3600))
-        E = sEfunc(rawdata.measurements)[discard:]
+        E = sEfunc(rawdata.measurements)[300:]
         t2 = time.time()
-        # print ("Time to run E2 = {:.2f} s / {:.3f} hrs".format((t2-t1),(t2-t1)/3600))
-        # T = sTfunc(rawdata.measurements)[discard:]
-        # t3 = time.time()
-        # print ("Time to run T2 = {:.2f} s / {:.3f} hrs".format((t3-t2),(t3-t2)/3600))
     
-    t = sample_instru.t[discard:]
+    t = (sample_instru.t)[300:]
     # t = (np.arange(0,len(A)+discard)/fs)[discard:]
 
-    # sdata = np.array([t,A,E,T])
     sdata = np.array([t,A,E])
-
-    # Extract A, E, T data to speed up re-running code.
-    # filepath = sample_outputf+'.txt'
-    # # filecontent = Table(sdata.T, names=['t','A','E','T'])
-    # filecontent = Table(sdata.T, names=['t','A','E'])
-    # ascii.write(filecontent, filepath, overwrite=True)
-
+    
     if printing:
         print ("Total time for sample = {:.2f} s / {:.2f} hrs".format(time.time()-t00,(time.time()-t00)/3600))
+    
+    # print ("RAM before del statement = {}".format(psutil.virtual_memory()[2]))
+    # del sample_instru
+    # print ("RAM after del statement = {}".format(psutil.virtual_memory()[2]))
     
     if genTDI:
         # return sAfunc, sEfunc, sTfunc
@@ -138,8 +138,8 @@ def BuildModelTDI(orbit_path,fs,size,Amp_true, f_true, phi0_true, gw_beta_true, 
     Afunc = ortho.A2.build(**rawdata.args)
     Efunc = ortho.E2.build(**rawdata.args)
     time_elapsed.append(time.time())
-    A = Afunc(rawdata.measurements)[discard:]
-    E = Efunc(rawdata.measurements)[discard:]
+    A = Afunc(rawdata.measurements)[300:]
+    E = Efunc(rawdata.measurements)[300:]
     time_elapsed.append(time.time())
 
     tmp = np.array(time_elapsed)[1:] - np.array(time_elapsed[:-1])
@@ -375,3 +375,338 @@ class myData(pytdi.Data):
         data = self(measurements, delays, fs)
         data.compute_delay_derivatives()
         return data
+
+##################################################################################################################
+#! /usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Container object for signals.
+
+Authors:
+    Jean-Baptiste Bayle <j2b.bayle@gmail.com>
+"""
+
+import abc
+import logging
+import h5py
+import numpy as np
+import matplotlib.pyplot as plt
+
+logger = logging.getLogger(__name__)
+
+
+class ForEachObject(abc.ABC):
+    """Abstract class which represents a dictionary holding a value for each object."""
+
+    def __init__(self, values):
+        """Initialize an object with a value or a function of the mosa index.
+
+        Args:
+            values: a value, a dictionary of values, or a function (mosa -> value)
+        """
+        if isinstance(values, dict):
+            self.dict = {mosa: values[mosa] for mosa in self.indices()}
+        elif callable(values):
+            self.dict = {mosa: values(mosa) for mosa in self.indices()}
+        elif isinstance(values, h5py.Dataset):
+            self.dict = {mosa: values[mosa] for mosa in self.indices()}
+        else:
+            self.dict = {mosa: values for mosa in self.indices()}
+
+    @classmethod
+    @abc.abstractmethod
+    def indices(cls):
+        """Return list of object indices."""
+        raise NotImplementedError
+
+    def transformed(self, transformation):
+        """Return a new dictionary from transformed objects.
+
+        Args:
+            transformation: function (mosa, value -> new_value)
+        """
+        return self.__class__(lambda mosa: transformation(mosa, self[mosa]))
+
+    def collapsed(self):
+        """Turn a numpy arrays containing identical elements into a scalar.
+
+        This method can be used to optimize computations when constant time series are involved.
+        """
+        return self.transformed(lambda _, x:
+            x[0] if isinstance(x, np.ndarray) and np.all(x == x[0]) else x
+        )
+
+    def write(self, hdf5, dataset):
+        """Write values in dataset on HDF5 file.
+
+        Args:
+            hdf5: HDF5 file in which to write
+            dataset: dataset name or path
+        """
+        # Retreive the maximum size of data
+        size = 1
+        for value in self.values():
+            if np.isscalar(value):
+                continue
+            if size != 1 and len(value) != size:
+                raise ValueError(f"incompatible sizes in dictionary '{size}' and '{len(size)}'")
+            size = max(size, len(value))
+        logger.debug("Writing dataset of size '%s' with '%s' columns", size, len(self.indices()))
+        # Write dataset
+        dtype = np.dtype({'names': self.indices(), 'formats': len(self.indices()) * [np.float64]})
+        hdf5.create_dataset(dataset, (size,), dtype=dtype)
+        for index in self.indices():
+            hdf5[dataset][index] = self[index]
+
+    def __getitem__(self, key):
+        return self.dict[key]
+
+    def __setitem__(self, key, item):
+        self.dict[key] = item
+
+    def values(self):
+        """Return dictionary values."""
+        return self.dict.values()
+
+    def keys(self):
+        """Return dictionary keys."""
+        return self.dict.keys()
+
+    def items(self):
+        """Return dictionary items."""
+        return self.dict.items()
+
+    def plot(self, output=None, dt=1, t0=0, size='auto', title='Signals'):
+        """Plot signals for each object.
+
+        Args:
+            output: output file, None to show the plots
+            dt: sampling period [s]
+            t0: initial time [s]
+            size: duration of time series, or 'auto' [samples]
+            title: plot title
+        """
+        if size == 'auto':
+            size = len(self) if len(self) > 1 else 100
+        t = t0 + np.arange(size) * dt
+        # Plot signals
+        logger.info("Plotting signals for each object")
+        plt.figure(figsize=(12, 4))
+        for key, signal in self.items():
+            plt.plot(t, np.broadcast_to(signal, size), label=key)
+        plt.grid()
+        plt.legend()
+        plt.xlabel("Time [s]")
+        plt.ylabel("Signal")
+        plt.title(title)
+        # Save or show glitch
+        if output is not None:
+            logger.info("Saving plot to %s", output)
+            plt.savefig(output, bbox_inches='tight')
+        else:
+            plt.show()
+
+    def __len__(self):
+        """Return maximum size of signals."""
+        sizes = [1 if np.isscalar(signal) else len(signal) for signal in self.values()]
+        return np.max(sizes)
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.dict == other.dict
+        if isinstance(other, dict):
+            return self.dict == other
+        return np.all([self[index] == other for index in self.indices()])
+
+    def __abs__(self):
+        return self.transformed(lambda index, value: abs(value))
+
+    def __neg__(self):
+        return self.transformed(lambda index, value: -value)
+
+    def __add__(self, other):
+        if isinstance(other, ForEachObject):
+            if isinstance(other, type(self)):
+                return self.transformed(lambda index, value: value + other[index])
+            raise TypeError(f"unsupported operand type for +: '{type(self)}' and '{type(other)}'")
+        return self.transformed(lambda _, value: value + other)
+
+    def __radd__(self, other):
+        return self + other
+
+    def __sub__(self, other):
+        if isinstance(other, ForEachObject):
+            if isinstance(other, type(self)):
+                return self.transformed(lambda index, value: value - other[index])
+            raise TypeError(f"unsupported operand type for -: '{type(self)}' and '{type(other)}'")
+        return self.transformed(lambda _, value: value - other)
+
+    def __rsub__(self, other):
+        return -(self - other)
+
+    def __mul__(self, other):
+        if isinstance(other, ForEachObject):
+            if isinstance(other, type(self)):
+                return self.transformed(lambda index, value: value * other[index])
+            raise TypeError(f"unsupported operand type for *: '{type(self)}' and '{type(other)}'")
+        return self.transformed(lambda _, value: value * other)
+
+    def __rmul__(self, other):
+        return self * other
+
+    def __floordiv__(self, other):
+        if isinstance(other, ForEachObject):
+            if isinstance(other, type(self)):
+                return self.transformed(lambda index, value: value // other[index])
+            raise TypeError(f"unsupported operand type for //: '{type(self)}' and '{type(other)}'")
+        return self.transformed(lambda _, value: value // other)
+
+    def __truediv__(self, other):
+        if isinstance(other, ForEachObject):
+            if isinstance(other, type(self)):
+                return self.transformed(lambda index, value: value / other[index])
+            raise TypeError(f"unsupported operand type for /: '{type(self)}' and '{type(other)}'")
+        return self.transformed(lambda _, value: value / other)
+
+    def __rtruediv__(self, other):
+        return (self / other)**(-1)
+
+    def __pow__(self, other):
+        return self.transformed(lambda _, value: value**other)
+
+    def __repr__(self):
+        return repr(self.dict)
+
+
+class ForEachSC(ForEachObject):
+    """Represents a dictionary of values for each spacecraft."""
+
+    @classmethod
+    def indices(cls):
+        return ['1', '2', '3']
+
+    @staticmethod
+    def distant_left_sc(sc):
+        """Return index of distant rleftspacecraft."""
+        if sc not in ForEachSC.indices():
+            raise ValueError(f"invalid spacecraft index '{sc}'")
+        return f'{int(sc) % 3 + 1}'
+
+    @staticmethod
+    def distant_right_sc(sc):
+        """Return index of distant right spacecraft."""
+        if sc not in ForEachSC.indices():
+            raise ValueError(f"invalid spacecraft index '{sc}'")
+        return f'{(int(sc) - 2) % 3 + 1}'
+
+    @staticmethod
+    def left_mosa(sc):
+        """Return index of left MOSA."""
+        if sc not in ForEachSC.indices():
+            raise ValueError(f"invalid spacecraft index '{sc}'")
+        return f'{sc}{ForEachSC.distant_left_sc(sc)}'
+
+    @staticmethod
+    def right_mosa(sc):
+        """Return index of right MOSA."""
+        if sc not in ForEachSC.indices():
+            raise ValueError(f"invalid spacecraft index '{sc}'")
+        return f'{sc}{ForEachSC.distant_right_sc(sc)}'
+
+    def for_each_mosa(self):
+        """Return a ForEachMOSA instance by sharing the spacecraft values on both MOSAs."""
+        return ForEachMOSA(lambda mosa: self[ForEachMOSA.sc(mosa)])
+
+    def __add__(self, other):
+        if isinstance(other, ForEachMOSA):
+            return self.for_each_mosa() + other
+        return super().__add__(other)
+
+    def __sub__(self, other):
+        if isinstance(other, ForEachMOSA):
+            return self.for_each_mosa() - other
+        return super().__sub__(other)
+
+    def __mul__(self, other):
+        if isinstance(other, ForEachMOSA):
+            return self.for_each_mosa() * other
+        return super().__mul__(other)
+
+    def __floordiv__(self, other):
+        if isinstance(other, ForEachMOSA):
+            return self.for_each_mosa() // other
+        return super().__floordiv__(other)
+
+    def __truediv__(self, other):
+        if isinstance(other, ForEachMOSA):
+            return self.for_each_mosa() / other
+        return super().__truediv__(other)
+
+
+class ForEachMOSA(ForEachObject):
+    """Represents a dictionary of values for each moveable optical subassembly (MOSA)."""
+
+    @classmethod
+    def indices(cls):
+        return ['12', '23', '31', '13', '32', '21']
+
+    @staticmethod
+    def sc(mosa):
+        """Return index of spacecraft hosting MOSA."""
+        return f'{mosa[0]}'
+
+    @staticmethod
+    def distant_mosa(mosa):
+        """Return index of distant MOSA.
+
+        In practive, we invert the indices to swap emitter and receiver.
+        """
+        if mosa not in ForEachMOSA.indices():
+            raise ValueError(f"invalid MOSA index '{mosa}'")
+        return f'{mosa[1]}{mosa[0]}'
+
+    @staticmethod
+    def adjacent_mosa(mosa):
+        """Return index of adjacent MOSA.
+
+        In practice, we replace the second index by the only unused spacecraft index.
+        """
+        if mosa not in ForEachMOSA.indices():
+            raise ValueError(f"invalid MOSA index '{mosa}'")
+        unused = [sc for sc in ForEachSC.indices() if sc not in mosa]
+        if len(unused) != 1:
+            raise RuntimeError(f"cannot find adjacent MOSA for '{mosa}'")
+        return f'{mosa[0]}{unused[0]}'
+
+    def distant(self):
+        """Return a ForEachMOSA instance for distant MOSAs."""
+        return ForEachMOSA(lambda mosa: self[ForEachMOSA.distant_mosa(mosa)])
+
+    def adjacent(self):
+        """Return a ForEachMOSA instance for adjacent MOSAs."""
+        return ForEachMOSA(lambda mosa: self[ForEachMOSA.adjacent_mosa(mosa)])
+
+    def __add__(self, other):
+        if isinstance(other, ForEachSC):
+            return self + other.for_each_mosa()
+        return super().__add__(other)
+
+    def __sub__(self, other):
+        if isinstance(other, ForEachSC):
+            return self - other.for_each_mosa()
+        return super().__sub__(other)
+
+    def __mul__(self, other):
+        if isinstance(other, ForEachSC):
+            return self * other.for_each_mosa()
+        return super().__mul__(other)
+
+    def __floordiv__(self, other):
+        if isinstance(other, ForEachSC):
+            return self // other.for_each_mosa()
+        return super().__floordiv__(other)
+
+    def __truediv__(self, other):
+        if isinstance(other, ForEachSC):
+            return self / other.for_each_mosa()
+        return super().__truediv__(other)

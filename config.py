@@ -1,0 +1,105 @@
+# Configuration file by Bart Ouwehand 08-06-2022
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+import h5py
+import scipy.signal
+import logging
+import time
+import multiprocess
+import os
+import psutil
+
+from lisagwresponse import GalacticBinary
+from lisainstrument import Instrument
+from lisaorbits import KeplerianOrbits
+
+from pytdi import Data
+from pytdi import michelson as mich
+from pytdi import ortho
+import pytdi
+
+from astropy.io import ascii
+from astropy.table import Table, Column, MaskedColumn
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+from astropy.coordinates import BarycentricMeanEcliptic
+
+from scipy.interpolate import interp1d
+from tqdm import tqdm
+
+
+
+orbit_path = 'esa-orbits.h5'
+# orbit_path = '../../orbits/kep-1hz30d.h5'
+gw_path = 'gws.h5'
+
+# Setup simluation parameters
+# fs = 0.1    # Hz
+fs = 0.05    # Hz
+day = 86400 # s
+duration = day*1 # X days
+size = duration*fs
+discard = 300
+rec = ['A','E','T']
+
+# Define the orbit, sample 10x a day and let it extend 110% of the duration of the simulation
+orbits_t0 = 0
+orbits_dt = day/10
+orbits_s = duration*11
+orbit = KeplerianOrbits(size=orbits_s,dt=orbits_dt, t0=orbits_t0)
+
+# Turn on/off binary creation & instrument simulation
+use_verbinaries = True
+gen_plots = False
+
+# Specify specific number of binaries & import their parameters
+Ngalbins = 16
+amplitude_amplification = 10
+
+if use_verbinaries:
+    # Define name of simulation uitput file
+    sample_outputf = 'measurements/sampdat_'+str(duration//day)+'d'+'_verbins' #extention of .h5 or .txt added later
+    
+    rawdata = ascii.read("verbinaries_data_wsource_name.txt")
+    
+    params = ['lGal', 'bGal', 'orbital_period', 'm1', 'm1e', 'm2', 'm2e', 'i', 'freq', 'par','epar', 'dis', 'edis', 'A', 'eA', 'SNR', 'eSNR']
+    # units: lGal [deg], bGal [deg], orbital_period [s], m1 [Msol], m1e [Msol], m2 [Msol], m2e [Msol]
+    # i [deg], freq (of gws) [mHz], par [mas], epar [mas], dis [pc], edis [pc], A [1e-23], eA [1e-23], SNR, eSNR
+    
+    sourcenames = np.array(rawdata["source"])[:Ngalbins]
+    Amp_true = (np.array(rawdata["A"])* (1e-23 * amplitude_amplification))[:Ngalbins] # 10yokto to 1e-23 
+    f_true = (np.array(rawdata["freq"])* (1e-3))[:Ngalbins] # mHz to Hz
+    iota = np.deg2rad(np.array(rawdata["i"]))[:Ngalbins] # deg to rad
+    
+    # Galactic coordinates of verification binaries   
+    source_gal_lon = np.array(rawdata["lGal"])[:Ngalbins]  # degree range from [0,360]
+    source_gal_lat = np.array(rawdata["bGal"])[:Ngalbins]  # degree range from [-90,90]
+
+    # Transform coordinates to (barycentric mean) ecliptic coordinates
+    gc = SkyCoord(l=source_gal_lon*u.degree, b=source_gal_lat*u.degree, frame='galactic')
+    gw_beta_true = np.deg2rad(gc.barycentricmeanecliptic.lon.value)[:Ngalbins] # degree to rad range [0,2pi]
+    gw_lambda_true = np.deg2rad(gc.barycentricmeanecliptic.lat.value)[:Ngalbins] # degree to rad range [-pi/2,pi/2]
+
+    # Transform coordinates to equatoral (ICRS) coordinates
+    # ra = gc.icrs.ra.value # degree range [0,360]
+    # dec = gc.icrs.dec.value # degree range [-90,90]
+    
+    totNgalbins = len(sourcenames)
+    phi0_true_forinst = np.zeros(Ngalbins)
+    phi0_true = np.array(ascii.read("verbinaries_phaseoffset_"+str(int(1/fs))+"dt.txt")['phi0'])[:Ngalbins]
+    print ("Number of Verification Binaries = {}".format(Ngalbins))
+
+else:
+    # Define name of simulation uitput file
+    sample_outputf = 'measurements/MCMCsample'+str(int(duration))+'s' #extention of .h5 or .txt added later
+    
+    totNgalbins = 2
+    Amp_true = np.array([1e-16,5e-13])[:Ngalbins]
+    f_true = np.array([1e-3,1e-4])[:Ngalbins]
+    
+    phi0_true_forinst = np.zeros(Ngalbins)
+    phi0_true = np.array([-0.4,0.2])[:Ngalbins]
+    gw_beta_true = np.array([0,0])[:Ngalbins]
+    gw_lambda_true = np.array([0,np.pi])[:Ngalbins]

@@ -2,6 +2,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+plt.style.use('../style.mplstyle')
 
 import h5py
 import scipy.signal
@@ -32,7 +33,7 @@ from tqdm import tqdm
 
 # When using ALICE, the paths change a little
 use_ALICE = False
-alice_test = True
+alice_test = False
 
 if use_ALICE:
     orbit_path = '../esa-orbits.h5'
@@ -40,7 +41,7 @@ if use_ALICE:
     ext2 = '/scratchdata/s2001713/'
 
 else:
-    orbit_path = '../../orbits/esa-orbits.h5'
+    orbit_path = '../esa-orbits.h5'
     ext = ''
     ext2 = 'gws_spam/'
 
@@ -52,29 +53,61 @@ gw_path = 'gws.h5'
 fs = 0.05    # Hz
 day = 86400 # s
 
+# Specify specific number of binaries & import their parameters
+Ngalbins = 16
+amplitude_amplification = 1
 
 if alice_test:
-    dur_range = np.array([10])
+    dur_range = np.array([5])
     # dur_range = np.array([10])
+    # alpha = np.array([1])
     alpha = np.array([1])
-    N1, N2 = 1,31
-else:
-    # dur_range = np.array([5])
-    dur_range = np.array([10,30,90,180])
-    # Defining alpha to iterate over
-    # alpha = np.array([1,10,100])#,10,100,1000])
-    alpha = np.array([-4,-2,0,2,4])
-    alpha = np.array([1,10,100,1000,10000])
-    N1,N2 = 10, 31
 
+    N1, N2 = 2,201
+    
+    # use verification binary with index
+    usebinaries = np.array(np.arange(Ngalbins),dtype=str)
+    
+else:
+    dur_range = np.array([5,10,30,90,180])
+    # dur_range = np.array([10,30,90,180])
+    # Defining alpha to iterate over
+    # alpha = np.array([-4,-2,0,2,4])
+    alpha = np.logspace(-4,4,9)
+    # alpha = np.array([1,10,100,1000,10000])
+    print ("Alpha values =",alpha)
+    N1, N2 = 30,101
+    
+    # use verification binary with index
+    usebinaries = np.array(np.arange(Ngalbins),dtype=str)
+
+# What alpha to sample, can be ['acc','OMS','both']
+sample_alpha = 'acc'
+# What turnoff can be ['laser', 'modulation', 'pathlength' 'clock', 'ranging' , 'jitters']
+# turnoff = ['laser', 'modulation', 'clock', 'ranging' , 'jitters']
+turnoff = 'None'
 
 
 duration = day*dur_range # X days
 size = duration*fs
 discard = 300
-rec = ['A','E','T']
+cutoff = 100
+rec = ['A','E']
+noise_source = ['tm_asds','oms_asds']
 
-alpha_name = str(int())
+
+# Generate the directory names for the different alpha names
+alpha_nm = []
+for alph in alpha:
+    tmp = int(np.log10(alph))
+    if tmp<0:
+        alpha_nm.append((-tmp)*'0'+'1')
+    elif tmp == 0:
+        alpha_nm.append('1')
+    elif tmp > 0:
+        alpha_nm.append('1'+tmp*'0')
+alpha_nm = np.array(alpha_nm)
+
 
 # Define the orbit, sample 10x a day and let it extend 110% of the duration of the simulation
 # orbits_t0 = 0
@@ -93,9 +126,6 @@ run_new_simulation = True
 gen_plots = False
 calculate_again = True
 
-# Specify specific number of binaries & import their parameters
-Ngalbins = 1
-amplitude_amplification = 1
 
 if use_verbinaries:
     # Define name of simulation uitput file
@@ -110,7 +140,7 @@ if use_verbinaries:
     sourcenames = np.array(rawdata["source"])[:Ngalbins]
     Amp_true = (np.array(rawdata["A"])* (1e-23 * amplitude_amplification))[:Ngalbins] # 10yokto to 1e-23 
     f_true = (np.array(rawdata["freq"])* (1e-3))[:Ngalbins] # mHz to Hz
-    iota = np.deg2rad(np.array(rawdata["i"]))[:Ngalbins] # deg to rad
+    iota_true = np.deg2rad(np.array(rawdata["i"]))[:Ngalbins] # deg to rad
     
     # Galactic coordinates of verification binaries   
     source_gal_lon = np.array(rawdata["lGal"])[:Ngalbins]  # degree range from [0,360]
@@ -145,4 +175,14 @@ else:
 
 # Amp_range = (Amp_true * (np.array((list(np.linspace(0.1,2.5,N2))*Ngalbins)).reshape(Ngalbins,N2)).T).T
 # Amp_range = (Amp_true * (np.array((list(np.linspace(0.1,1.9,N2))*Ngalbins)).reshape(Ngalbins,N2)).T).T
-Amp_range = (Amp_true * (np.array((list(np.logspace(-2,2,N2))*Ngalbins)).reshape(Ngalbins,N2)).T).T
+# Amp_range = (Amp_true * (np.array((list(np.logspace(-3,3,N2))*Ngalbins)).reshape(Ngalbins,N2)).T).T
+# Amp_range = (Amp_true * (np.array((list(np.logspace(-2,2,N2))*Ngalbins)).reshape(Ngalbins,N2)).T).T
+tmp = np.logspace(-2,2,N2//2)
+lst = list(-1*tmp[::-1])
+lst.extend([0])
+lst.extend((tmp))
+
+Amp_range = (Amp_true * (np.array((lst*Ngalbins)).reshape(Ngalbins,N2)+1).T).T
+
+
+# print (Amp_range[0]/Amp_true[0])
